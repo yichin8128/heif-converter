@@ -34,10 +34,13 @@ jobs:
           fi
           
           npm init -y
-          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets sharp
+          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/share @capacitor/assets sharp
           
           npx cap init "HEIF轉檔" "com.heif.converter" --web-dir www
           npx cap add android
+          
+          # 開啟大型記憶體 Heap 與硬體加速
+          sed -i 's/<application/<application android:largeHeap="true" android:hardwareAccelerated="true"/g' android/app/src/main/AndroidManifest.xml
           
           # 套用 App Icon
           if [ -f "icon.png" ]; then
@@ -48,6 +51,8 @@ jobs:
             cp icon.png assets/icon-background.png
             npx @capacitor/assets generate --android
           fi
+          
+          npx cap sync
           
           cd android
           chmod +x gradlew
