@@ -11,10 +11,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
-          java-version: 17
+          java-version: 21
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -29,18 +29,29 @@ jobs:
           elif [ -f "index.php" ]; then
             cp index.php www/index.html
           else
-            echo "找不到 index.html 或 index.php 檔案！"
+            echo "找不到 index.html 或 index.php 檔案"
             exit 1
           fi
           
           npm init -y
-          npm install @capacitor/core@latest @capacitor/cli@latest @capacitor/android@latest
-          npx cap init "HEIF Converter" "com.heif.converter" --web-dir www
+          npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/assets sharp
+          
+          npx cap init "HEIF轉檔" "com.heif.converter" --web-dir www
           npx cap add android
+          
+          # 套用 App Icon
+          if [ -f "icon.png" ]; then
+            mkdir -p assets
+            cp icon.png assets/icon.png
+            cp icon.png assets/icon-only.png
+            cp icon.png assets/icon-foreground.png
+            cp icon.png assets/icon-background.png
+            npx @capacitor/assets generate --android
+          fi
           
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
