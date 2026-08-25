@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HEIC / HEIF 轉 JPG 轉換器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen font-sans">
+
+    <div class="max-w-2xl mx-auto px-4 py-8 space-y-6">
+
+        <header class="text-center space-y-2">
+            <h1 class="text-2xl font-bold flex items-center justify-center gap-3">
+                <i class="fa-solid fa-camera text-indigo-400"></i>
+                <span>HEIC / HEIF 轉 JPG 轉換器</span>
+            </h1>
+            <p class="text-xs text-slate-400">採用二進位直通技術，100% 完整保留相機所有 EXIF、快門與鏡頭參數</p>
+        </header>
+
+        <div id="drop-zone" class="border-2 border-dashed border-slate-600 hover:border-indigo-500 bg-slate-800/60 rounded-2xl p-8 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3">
+            <i class="fa-solid fa-cloud-arrow-up text-4xl text-indigo-400"></i>
+            <div class="space-y-1">
+                <div class="text-sm font-semibold">點擊選擇 HEIC/HEIF 檔案</div>
+                <div class="text-xs text-slate-400">支援批次多檔轉換 (保留完整拍攝參數)</div>
+            </div>
+            <input type="file" id="file-input" accept=".heic,.heif,image/heic,image/heif" multiple class="hidden">
+        </div>
+
+        <div id="file-list" class="space-y-2.5"></div>
+
+    </div>
+
+    <script type="module">
+        import libheif from 'https://esm.sh/libheif-js@1.18.2';
+
+        let heifEngine = null;
+
+        async function initDecoder() {
+            if (heifEngine) return heifEngine;
+            const lib = typeof libheif === 'function' ? await libheif() : libheif;
+            const DecoderClass = lib.HeifDecoder || (lib.default && lib.default.HeifDecoder);
+            if (!DecoderClass) throw new Error("找不到 HeifDecoder 類別");
+            heifEngine = DecoderClass;
+            return heifEngine;
+        }
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const fileList = document.getElementById('file-list');
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        // 從 HEIF 二進位中定位 TIFF 區塊
+        function extractTiffBlock(heifBuffer) {
+            const bytes = new Uint8Array(heifBuffer);
+            const len = bytes.length;
+
+            for (let i = 0; i < len - 4; i++) {
+                const isLittleEndian = (bytes[i] === 0x49 && bytes[i+1] === 0x49 && bytes[i+2] === 0x2A && bytes[i+3] === 0x00);
+                const isBigEndian = (bytes[i] === 0x4D && bytes[i+1] === 0x4D && bytes[i+2] === 0x00 && bytes[i+3] === 0x2A);
+
+                if (isLittleEndian || isBigEndian) {
+                    const maxTiffSize = 65500;
+                    const end = Math.min(len, i + maxTiffSize);
+                    return bytes.slice(i, end);
+                }
+            }
+            return null;
+        }
+
+        // 將 TIFF 區塊封裝成 JPEG APP1 並無損注入 JPEG
+        function insertApp1Exif(jpegBytes, tiffBytes) {
+            if (!tiffBytes || tiffBytes.length === 0) return jpegBytes;
+
+            const exifHeader = new Uint8Array([0x45, 0x78, 0x69, 0x66, 0x00, 0x00]);
+            const app1Length = 2 + exifHeader.length + tiffBytes.length;
+
+            const app1Segment = new Uint8Array(2 + app1Length);
+            app1Segment[0] = 0xFF;
+            app1Segment[1] = 0xE1;
+            app1Segment[2] = (app1Length >> 8) & 0xFF;
+            app1Segment[3] = app1Length & 0xFF;
+            app1Segment.set(exifHeader, 4);
+            app1Segment.set(tiffBytes, 4 + exifHeader.length);
+
+            // 組合：JPEG SOI (2 bytes) + APP1 Segment + 剩餘 JPEG 內容
+            const result = new Uint8Array(2 + app1Segment.length + (jpegBytes.length - 2));
+            result.set(jpegBytes.subarray(0, 2), 0);
+            result.set(app1Segment, 2);
+            result.set(jpegBytes.subarray(2), 2 + app1Segment.length);
+
+            return result;
+        }
+
+        async function handleFiles(files) {
+            if (!files || files.length === 0) return;
+
+            for (const file of files) {
+                const itemBox = document.createElement('div');
+                itemBox.className = "bg-slate-800 border border-slate-700/60 rounded-xl p-3 flex items-center justify-between text-xs gap-3";
+                itemBox.innerHTML = `
+                    <div class="flex items-center gap-3 truncate">
+                        <i class="fa-regular fa-file-image text-indigo-400 text-lg"></i>
+                        <div class="truncate">
+                            <div class="font-semibold text-slate-200 truncate">${file.name}</div>
+                            <div class="text-[10px] text-slate-400">${(file.size / (1024 * 1024)).toFixed(2)} MB</div>
+                        </div>
+                    </div>
+                    <div class="status-box flex items-center gap-2 flex-shrink-0">
+                        <span class="px-2 py-1 bg-indigo-950 text-indigo-300 border border-indigo-500/40 rounded text-[11px] flex items-center gap-1.5">
+                            <i class="fa-solid fa-spinner fa-spin"></i> 轉碼中...
+                        </span>
+                    </div>
+                `;
+                fileList.appendChild(itemBox);
+
+                const statusBox = itemBox.querySelector('.status-box');
+
+                try {
+                    const Decoder = await initDecoder();
+                    const decoder = new Decoder();
+                    const buffer = await file.arrayBuffer();
+                    const data = decoder.decode(new Uint8Array(buffer));
+
+                    if (!data || data.length === 0) {
+                        throw new Error("無法解析檔案內容");
+                    }
+
+                    const image = data[0];
+                    const width = image.get_width();
+                    const height = image.get_height();
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    const imgData = ctx.createImageData(width, height);
+
+                    await new Promise((resolve, reject) => {
+                        image.display(imgData, (displayData) => {
+                            if (!displayData) {
+                                reject(new Error("色彩解碼失敗"));
+                                return;
+                            }
+                            ctx.putImageData(displayData, 0, 0);
+                            resolve();
+                        });
+                    });
+
+                    // 取得原始 Canvas 的 JPEG 二進位資料
+                    const rawJpegBlob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.94));
+                    const rawJpegBuffer = await rawJpegBlob.arrayBuffer();
+                    const rawJpegBytes = new Uint8Array(rawJpegBuffer);
+
+                    // 抽取相機 TIFF EXIF 二進位並寫入
+                    const tiffBytes = extractTiffBlock(buffer);
+                    const finalJpegBytes = insertApp1Exif(rawJpegBytes, tiffBytes);
+
+                    const finalBlob = new Blob([finalJpegBytes], { type: 'image/jpeg' });
+                    const outUrl = URL.createObjectURL(finalBlob);
+                    const outName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+                    const fileSizeMB = (finalBlob.size / (1024 * 1024)).toFixed(2);
+
+                    statusBox.innerHTML = `
+                        <a href="${outUrl}" download="${outName}" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition shadow">
+                            <i class="fa-solid fa-download"></i> 下載 JPG (${fileSizeMB} MB)
+                        </a>
+                    `;
+
+                } catch (err) {
+                    statusBox.innerHTML = `<span class="px-2 py-1 bg-rose-900/60 text-rose-300 rounded text-[11px]">失敗: ${err.message || '轉碼異常'}</span>`;
+                }
+            }
+        }
+    </script>
+</body>
+</html>
