@@ -19,22 +19,22 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Build APK via Capacitor
         run: |
-          mkdir www
-          # 將 index.php 另存為靜態網頁打包進 APK
-          if [ -f "index.php" ]; then
-            cp index.php www/index.html
-          elif [ -f "index.html" ]; then
+          mkdir -p www
+          if [ -f "index.html" ]; then
             cp index.html www/index.html
+          elif [ -f "index.php" ]; then
+            cp index.php www/index.html
           fi
           npm init -y
           npm install @capacitor/core @capacitor/cli @capacitor/android
           npx cap init "HEIF Converter" "com.heif.converter" --web-dir www
           npx cap add android
           cd android
+          chmod +x gradlew
           ./gradlew assembleDebug
 
       - name: Upload APK
