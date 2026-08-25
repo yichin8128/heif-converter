@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HEIC / HEIF 轉 JPG 轉換器</title>
+    <link rel="icon" type="image/png" href="icon.png">
+    <link rel="apple-touch-icon" href="icon.png">
+    <meta name="theme-color" content="#0f172a">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -11,19 +14,19 @@
 
     <div class="max-w-2xl mx-auto px-4 py-8 space-y-6">
 
-        <header class="text-center space-y-2">
-            <h1 class="text-2xl font-bold flex items-center justify-center gap-3">
-                <i class="fa-solid fa-camera text-indigo-400"></i>
-                <span>HEIC / HEIF 轉 JPG 轉換器</span>
-            </h1>
-            <p class="text-xs text-slate-400">採用二進位直通技術，100% 完整保留相機所有 EXIF、快門與鏡頭參數</p>
+        <header class="text-center space-y-3">
+            <div class="flex items-center justify-center gap-3">
+                <img src="icon.png" alt="App Icon" class="w-10 h-10 rounded-xl shadow-md border border-slate-700/60 object-cover">
+                <h1 class="text-2xl font-bold text-slate-100">HEIC / HEIF 轉 JPG 轉換器</h1>
+            </div>
+            <p class="text-xs text-slate-400">完整保留快門、光圈、鏡頭參數與 GPS 定位</p>
         </header>
 
         <div id="drop-zone" class="border-2 border-dashed border-slate-600 hover:border-indigo-500 bg-slate-800/60 rounded-2xl p-8 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3">
             <i class="fa-solid fa-cloud-arrow-up text-4xl text-indigo-400"></i>
             <div class="space-y-1">
                 <div class="text-sm font-semibold">點擊選擇 HEIC/HEIF 檔案</div>
-                <div class="text-xs text-slate-400">支援批次多檔轉換 (保留完整拍攝參數)</div>
+                <div class="text-xs text-slate-400">支援批次轉換並儲存至裝置</div>
             </div>
             <input type="file" id="file-input" accept=".heic,.heif,image/heic,image/heif" multiple class="hidden">
         </div>
@@ -53,7 +56,6 @@
         dropZone.onclick = () => fileInput.click();
         fileInput.onchange = (e) => handleFiles(e.target.files);
 
-        // 從 HEIF 二進位中定位 TIFF 區塊
         function extractTiffBlock(heifBuffer) {
             const bytes = new Uint8Array(heifBuffer);
             const len = bytes.length;
@@ -71,7 +73,6 @@
             return null;
         }
 
-        // 將 TIFF 區塊封裝成 JPEG APP1 並無損注入 JPEG
         function insertApp1Exif(jpegBytes, tiffBytes) {
             if (!tiffBytes || tiffBytes.length === 0) return jpegBytes;
 
@@ -86,13 +87,47 @@
             app1Segment.set(exifHeader, 4);
             app1Segment.set(tiffBytes, 4 + exifHeader.length);
 
-            // 組合：JPEG SOI (2 bytes) + APP1 Segment + 剩餘 JPEG 內容
             const result = new Uint8Array(2 + app1Segment.length + (jpegBytes.length - 2));
             result.set(jpegBytes.subarray(0, 2), 0);
             result.set(app1Segment, 2);
             result.set(jpegBytes.subarray(2), 2 + app1Segment.length);
 
             return result;
+        }
+
+        // 兼容 Android WebView / Capacitor 與 一般瀏覽器的儲存方法
+        async function saveJpgFile(blob, fileName) {
+            // 若在 Capacitor 原生環境中執行
+            if (window.Capacitor && window.Capacitor.Plugins) {
+                const { Filesystem, Share } = window.Capacitor.Plugins;
+                if (Filesystem && Share) {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(blob);
+                    reader.onloadend = async () => {
+                        const base64Data = reader.result;
+                        const savedFile = await Filesystem.writeFile({
+                            path: fileName,
+                            data: base64Data,
+                            directory: 'CACHE'
+                        });
+                        await Share.share({
+                            title: '儲存轉換照片',
+                            url: savedFile.uri
+                        });
+                    };
+                    return;
+                }
+            }
+
+            // 一般瀏覽器或 Web 環境回退
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
 
         async function handleFiles(files) {
@@ -150,25 +185,24 @@
                         });
                     });
 
-                    // 取得原始 Canvas 的 JPEG 二進位資料
                     const rawJpegBlob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.94));
                     const rawJpegBuffer = await rawJpegBlob.arrayBuffer();
                     const rawJpegBytes = new Uint8Array(rawJpegBuffer);
 
-                    // 抽取相機 TIFF EXIF 二進位並寫入
                     const tiffBytes = extractTiffBlock(buffer);
                     const finalJpegBytes = insertApp1Exif(rawJpegBytes, tiffBytes);
 
                     const finalBlob = new Blob([finalJpegBytes], { type: 'image/jpeg' });
-                    const outUrl = URL.createObjectURL(finalBlob);
                     const outName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
                     const fileSizeMB = (finalBlob.size / (1024 * 1024)).toFixed(2);
 
-                    statusBox.innerHTML = `
-                        <a href="${outUrl}" download="${outName}" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition shadow">
-                            <i class="fa-solid fa-download"></i> 下載 JPG (${fileSizeMB} MB)
-                        </a>
-                    `;
+                    const downloadBtn = document.createElement('button');
+                    downloadBtn.className = "px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1 transition shadow cursor-pointer";
+                    downloadBtn.innerHTML = `<i class="fa-solid fa-download"></i> 儲存 JPG (${fileSizeMB} MB)`;
+                    downloadBtn.onclick = () => saveJpgFile(finalBlob, outName);
+
+                    statusBox.innerHTML = '';
+                    statusBox.appendChild(downloadBtn);
 
                 } catch (err) {
                     statusBox.innerHTML = `<span class="px-2 py-1 bg-rose-900/60 text-rose-300 rounded text-[11px]">失敗: ${err.message || '轉碼異常'}</span>`;
